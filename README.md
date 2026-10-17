@@ -127,12 +127,12 @@ attributes come from the older v1 shadow that carries no timestamp.
 
 ## Implementation notes
 
-The integration is pinned to `qubopy==0.1.6`, which handles authentication,
+The integration is pinned to `qubopy==0.2.0`, which handles authentication,
 token refresh, device discovery, typed device objects and shadow parsing, and
 covers the response shape of every request this integration sends.
 
 Earlier versions had five defects that made them unusable here, all reported
-upstream and fixed in 0.1.4 and still true in 0.1.6:
+upstream and fixed in 0.1.4:
 
 - The cloud answers attribute writes and commands with HTTP 200 and the plain text
   `SUCCESS`. Older `qubopy` parsed every 2xx body as JSON, so a write that fully
@@ -158,17 +158,22 @@ so for two narrow reasons:
 `Subscriber-Key` is the live access token, not the static 64-hex constant
 embedded in the app binary; hardcoding the constant yields 401s.
 
-Two `qubopy` behaviours are still worth knowing about, neither of which this
-integration can fix:
+Two `qubopy` behaviours are worth knowing about:
 
-- A refresh that returns no new refresh token falls back to the stored one. 0.1.6
-  raises `QuboAuthError` when the cloud rejects the refresh, but a silent reuse of
-  a spent token remains possible.
-- `initiate_p2p_call()` sends the account's user UUID as `mobileUUID` and the
-  login source device as `srcDeviceId`, and offers no override. A working
-  session needs the *paired phone's* device UUID, so the library cannot drive
-  local P2P video. That is what [docs/qubo_p2p_client.py](docs/qubo_p2p_client.py)
-  exists for.
+- **The refresh token is static, not rotating.** When a refresh response omits
+  `refreshToken`, `qubopy` keeps the stored one — which is correct. The Qubo
+  refresh token is a long-lived credential (JWT claim ~180 days), not a
+  single-use one, and reusing it across hourly refreshes is what the vendor app
+  does. A rejected refresh raises `QuboAuthError` and drops the token, so a
+  genuinely expired one still surfaces as a re-login rather than a silent retry.
+- **P2P signalling is all `qubopy` implements.** Since 0.2.0,
+  `initiate_p2p_call()` accepts `mobile_uuid` and `src_device_id` overrides, so
+  it can now address the doorbell the way a working session requires. It still
+  stops at the `p2pCall` POST: the UDP handshake, AES-128-GCM decryption and
+  FU-A reassembly are not in the library, and the media would have nowhere to go.
+  Local P2P video therefore remains
+  [docs/qubo_p2p_client.py](docs/qubo_p2p_client.py)'s job, which does the
+  handshake and feeds ffmpeg.
 
 ### Upgrading
 
@@ -178,7 +183,7 @@ copied over `custom_components/` — install it manually before restarting Home
 Assistant:
 
 ```
-docker exec homeassistant pip install qubopy==0.1.6
+docker exec homeassistant pip install qubopy==0.2.0
 ```
 
 ## Tests
@@ -202,6 +207,6 @@ which is the one place a wrong answer means a door reads open when it is shut.
 `test_writes.py` pins the exact request bodies sent to the cloud, since the
 command body nests `instanceId` inside the command while the attribute-write
 body has it at the top level — mixing them up earns a rejected write. It also
-stubs `request()` the way 0.1.4+ behaves, because the integration relies on the
+stubs `request()` the way 0.2.0 behaves, because the integration relies on the
 library to accept the plain-text `SUCCESS` reply and to map 401/403 onto an auth
 error.
