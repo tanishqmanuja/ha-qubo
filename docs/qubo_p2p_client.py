@@ -31,6 +31,12 @@ Protocol (reverse-engineered from the vendor app, Sep 2026):
 Usage:
     qubo_p2p_client.py <out.h264|-> [port]
 
+    Invoke through `sh -c` in a go2rtc `exec:` source. The real media leaves over
+    RTSP via `{output}`, so the source writes nothing go2rtc can read; go2rtc
+    logs `ERR [exec] timeout` and kills the process it spawned. `sh -c` absorbs
+    that and leaves the pipeline orphaned and running, which is what keeps the
+    stream alive. The error is cosmetic.
+
 Environment:
     QSP        service provider id          (default: Qubo's public constant)
     QDEVICE    doorbell device UUID         (required)
@@ -40,7 +46,10 @@ Environment:
     QADVERT    LAN IP to advertise          (default: first outbound address)
     QPORT      local UDP port               (default: 49700)
     QQUALITY   low | high                    (default: low)
-    QDUR       seconds to run before exiting (default: 60)
+    QDUR       seconds to run before exiting (default: 60). Raise it well past
+               the longest expected viewing session: go2rtc does not restart a
+               finished exec source, so exiting under a viewer kills their stream
+               with nothing to replace it.
     QSTORE     path to Home Assistant's core.config_entries
     QACCESS / QREFRESH / QUUID / QDEVICEID
                explicit credentials, used instead of reading QSTORE

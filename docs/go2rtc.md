@@ -98,7 +98,7 @@ preload:
 
 streams:
   qubo_doorbell:
-    - exec:sh -c "QDEVICE=<doorbell-uuid> QUNIT=<unit-uuid> QMOB=<phone-uuid> QADVERT=<host-lan-ip> QPORT=49700 QQUALITY=high QSTORE=/ha-storage/core.config_entries python3 /config/qubo_p2p_client.py - 49700 2>/config/qubo_err.log | ffmpeg -hide_banner -loglevel error -f h264 -i pipe:0 -c copy -f rtsp {output}"
+    - exec:sh -c "QDEVICE=<doorbell-uuid> QUNIT=<unit-uuid> QMOB=<phone-uuid> QADVERT=<host-lan-ip> QPORT=49700 QQUALITY=high QDUR=86400 QSTORE=/ha-storage/core.config_entries python3 /config/qubo_p2p_client.py - 49700 2>>/config/qubo_err.log | ffmpeg -hide_banner -loglevel error -f h264 -i pipe:0 -c copy -f rtsp {output}"
 
 webrtc:
   candidates:
@@ -109,12 +109,36 @@ Notes on that line:
 
 - The script and ffmpeg are joined by a pipe. The script writes H.264 on stdout,
   ffmpeg reads it and republishes it to go2rtc with `-f rtsp {output}`.
-- `2>/config/qubo_err.log` captures the script's progress. It prints how many
+- `2>>/config/qubo_err.log` captures the script's progress. It prints how many
   packets it decrypted, which is the quickest way to tell "no handshake" from
-  "handshake fine, no media".
+  "handshake fine, no media". Append (`>>`) rather than truncate so restarting
+  go2rtc does not throw away the evidence of the previous run.
 - `-c copy` avoids a pointless re-encode.
+- `QDUR=86400` keeps one session alive for a day. **This is not optional.** The
+  client exits when `QDUR` expires, and go2rtc does *not* restart a finished
+  exec source — a viewer watching at that moment gets a stream that dies with
+  nothing to replace it. See [why the obvious fixes backfire](#why-the-obvious-fixes-backfire).
 - `preload` keeps one session open so the first viewer does not wait for a
   handshake. Without it the stream still works, it just connects on demand.
+
+## Why the obvious fixes backfire
+
+The failure looks like "go2rtc does not reconnect", and the two natural repairs
+both make it worse. Worth writing down.
+
+**Do not wrap the pipeline in a retry loop.** `exec:` sources are one process per
+consumer session. A `while :; do … done` around the line republishes a *new*
+ffmpeg to the same `{output}` on every cycle, and each republish interrupts the
+viewer already attached — you get `MSE stalled`, `WebRTC connect timeout`, and the
+client flapping between transports while go2rtc looks healthy. Make the session
+durable with `QDUR` instead of restarting it.
+
+**Keep the `sh -c`.** The media goes to go2rtc over RTSP, not stdout, so the exec
+source produces no output and go2rtc logs `ERR [exec] timeout` and kills the
+process it started. With `sh -c` in front, only the shell is killed and the
+pipeline is orphaned and carries on, which is why the line above keeps working
+despite that error. Replace `sh -c` with a bare `python3 …` and the run is torn
+down early. The error is cosmetic here; the shell is not.
 
 Restart go2rtc and watch for decrypted packets:
 
@@ -134,11 +158,31 @@ Annex-B. Check that the doorbell is actually sending video — privacy mode or
 "do not disturb" can stop it.
 
 **It works, then drops after a minute.** `QDUR` defaults to 60 seconds, after
-which the client exits deliberately. Raise `QDUR` or leave `preload` enabled so
-go2rtc restarts it.
+which the client exits deliberately — and go2rtc will not start it again for the
+viewer that is already watching. Set `QDUR` high (86400). A loop around the
+command looks like a fix and is not; see
+[why the obvious fixes backfire](#why-the-obvious-fixes-backfire).
+
+**`WebRTC connect timeout` or `MSE stalled` in a browser, but frames decode
+fine via `curl /api/frame.jpeg`.** Usually a second publish into the same
+`{output}` — a retry loop, or go2rtc restarting a session under an attached
+viewer. Check `docker logs go2rtc | grep qubo` for how many producers cycle
+while a single viewer is watching.
+
+**`HTTP Error 400` from `p2pCall`.** The cloud refused the session request, which
+usually means the doorbell is still occupied by a previous session that has not
+wound down. Wait, or power-cycle the doorbell. Do not retry in a tight loop —
+that is what keeps it occupied.
 
 **Bind failure on restart.** The client sets `SO_REUSEADDR` and retries once
 after 3 seconds, so a lingering previous process is normally not a problem.
+
+**Two `qubo_p2p_client.py` processes on the same port.** Expected: `preload`
+holds a standby session while a viewer's session runs. The doorbell serves one
+peer at a time, so the two compete. It works in practice, but if sessions refuse
+to start, drop `qubo_doorbell` from the `preload:` block — with a long `QDUR` the
+viewer's own session already lasts, so the standby buys about a second of
+startup at the cost of a second slot.
 
 ## Honest limitations
 
