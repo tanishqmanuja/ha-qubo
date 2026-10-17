@@ -127,24 +127,59 @@ attributes come from the older v1 shadow that carries no timestamp.
 
 ## Implementation notes
 
-`qubopy` handles authentication, device discovery, typed device objects and
-shadow parsing. A handful of endpoints it gets wrong are handled directly in
-`api.py`, which is the only module that talks to the cloud by hand:
+The integration is pinned to `qubopy==0.1.4`, which handles authentication,
+token refresh, device discovery, typed device objects and shadow parsing, and
+covers the response shape of every request this integration sends.
 
-- The cloud answers attribute writes and commands with HTTP 200 and the plain
-  text `SUCCESS`. `qubopy` parses every 2xx body as JSON, so a write that fully
-  succeeded raises `Failed to parse server response as JSON`. Writes here are
-  issued against the session directly and judged by status code.
-- `qubopy`'s `send_command()` and `update_shadow_attribute()` build the correct
-  URLs but send `POST`, where the cloud only accepts `PUT`. Their path
-  constants are correct, so they are reused and the verb is corrected.
-- There is no `qubopy` reader for the v2 per-attribute shadow, which is the only
-  way to read a live attribute together with the moment the device last
-  reported it. The v1 shadow that `qubopy` parses carries no timestamps, so
-  stale readings are indistinguishable from fresh ones.
+Earlier versions had five defects that made them unusable here, all reported
+upstream and fixed in 0.1.4:
+
+- The cloud answers attribute writes and commands with HTTP 200 and the plain text
+  `SUCCESS`. Older `qubopy` parsed every 2xx body as JSON, so a write that fully
+  succeeded raised `Failed to parse server response as JSON`.
+- `send_command()` and `update_shadow_attribute()` built the correct URLs but sent
+  `POST`, where the cloud only accepts `PUT` (`405 Request method 'POST' not
+  supported`).
+- `get_all_shadows()` issued a `GET` the cloud rejects with 405.
+- `get_device_events()` pointed at an endpoint that answers 405 or 404.
+- The v1 shadow `qubopy` parses carries no timestamps, so a stale reading is
+  indistinguishable from a fresh one. 0.1.4 adds `get_device_shadow_v2()`,
+  which returns the value together with the moment the device last reported it.
+
+`api.py` is the only module that still reaches past the library, and it now does
+so for two narrow reasons:
+
+- Reads go through `get_device_shadow_v2()` rather than the default v1 shadow,
+  because a switch write cannot be confirmed without a device-side timestamp.
+- Write paths are formatted in `api.py` rather than by the library's wrappers, so
+  that a device missing its unit or entity binding fails loudly, naming the
+  device, instead of addressing a guessed scope.
 
 `Subscriber-Key` is the live access token, not the static 64-hex constant
 embedded in the app binary; hardcoding the constant yields 401s.
+
+Two `qubopy` behaviours are still worth knowing about, neither of which this
+integration can fix:
+
+- A refresh that returns no new refresh token falls back to the stored one. 0.1.4
+  raises `QuboAuthError` when the cloud rejects the refresh, but a silent reuse of
+  a spent token remains possible.
+- `initiate_p2p_call()` sends the account's user UUID as `mobileUUID` and the
+  login source device as `srcDeviceId`, and offers no override. A working
+  session needs the *paired phone's* device UUID, so the library cannot drive
+  local P2P video. That is what [docs/qubo_p2p_client.py](docs/qubo_p2p_client.py)
+  exists for.
+
+### Upgrading
+
+The requirement is pinned, so Home Assistant installs the right version on a fresh
+setup. An **existing** install does not reinstall dependencies when files are
+copied over `custom_components/` — install it manually before restarting Home
+Assistant:
+
+```
+docker exec homeassistant pip install qubopy==0.1.4
+```
 
 ## Tests
 
@@ -166,4 +201,7 @@ python tests/test_writes.py
 which is the one place a wrong answer means a door reads open when it is shut.
 `test_writes.py` pins the exact request bodies sent to the cloud, since the
 command body nests `instanceId` inside the command while the attribute-write
-body has it at the top level — mixing them up earns a rejected write.
+body has it at the top level — mixing them up earns a rejected write. It also
+stubs `request()` the way 0.1.4 behaves, because the integration relies on the
+library to accept the plain-text `SUCCESS` reply and to map 401/403 onto an auth
+error.
