@@ -1,12 +1,21 @@
-# Qubo for Home Assistant
+# Qubo // Home Assistant
 
-Custom integration for Qubo video doorbells, cameras and smart door locks,
-built on the [`qubopy`](https://github.com/selvakk2k/qubopy) client library.
+Qubo's own app talks to the cloud, and the cloud is the only thing standing
+between your doorbell and your Home Assistant. This integration sits on top of
+the Qubo REST API so your lock, doorbell and camera become real entities
+instead of a wall of notifications. It doesn't pretend the cloud is gone — but
+it does stop pretending a toggle worked when the device never answered.
+
+- Writes you can check: every switch is confirmed against a device-side timestamp, not just accepted by the cloud.
+- The switches the Qubo app shows on the doorbell screen: DND, chime, privacy, tamper alerts, timelapse, plus lock silent mode.
+- A lock entity that tells you the truth: remote unlock only, because the cloud genuinely cannot motorise the bolt back.
+- Diagnostics when something's off: wifi SSID, reported time zone, battery, and the last ring.
+- Your session stays yours: the integration signs in under its own device name, so logging out on your phone never breaks Home Assistant.
 
 Tested against a Qubo Video Doorbell Pro and an HLM04A Smart Door Lock on
 Home Assistant 2026.10.
 
-## Requirements
+## 🚀 Requirements
 
 - Home Assistant 2024.12 or newer.
 - A Qubo account that owns your hardware and can sign in with **email and
@@ -14,32 +23,32 @@ Home Assistant 2026.10.
   supported, because that login route returns a one-hour token with no refresh
   token, so the integration would have to re-authenticate constantly.
 
-## Installation
+## 📦 Installation
 
 This repository is private, so [HACS](https://hacs.xyz/) cannot install it —
 HACS only serves public repositories. Install manually:
 
-1. Copy the `custom_components/qubo` folder into your Home Assistant
-   `config/custom_components` directory, so you end up with
-   `config/custom_components/qubo/__init__.py`.
-2. Restart Home Assistant.
-3. Go to **Settings -> Devices & Services -> Add Integration** and search for
-   **Qubo**.
+```sh
+git clone https://github.com/tanishqmanuja/ha-qubo.git
+cp -r ha-qubo/custom_components/qubo config/custom_components/
+```
 
-Then open the entry's **Configure** button at any time to change the login name
+Then restart Home Assistant, go to **Settings -> Devices & Services -> Add
+Integration** and search for **Qubo**.
+
+Open the entry's **Configure** button at any time to change the login name
 described below.
 
-## Setup
+## ⚡ Quick start
 
-You need the email and password of the Qubo cloud account that owns the
-hardware.
-
-### Login name
-
-`Name shown in the Qubo app` sets the label this integration signs in with. It
-appears under *Account -> Logged In Devices* in the Qubo mobile app, where you
-can also revoke the session. Changing it forces a fresh login under the new
-name.
+1. Add the integration and sign in with the email and password of the Qubo
+   cloud account that owns the hardware.
+2. Set the login name: `Name shown in the Qubo app` is the label this
+   integration signs in with. It appears under *Account -> Logged In Devices* in
+   the Qubo mobile app, where you can also revoke the session. Changing it forces
+   a fresh login under the new name.
+3. Toggle a switch. The integration shows your choice immediately, then re-reads
+   it on the next poll and shows whatever the device actually reports.
 
 Two device ids are involved and they are deliberately kept apart:
 
@@ -50,7 +59,7 @@ Two device ids are involved and they are deliberately kept apart:
   share that app's session, so tapping "Logout" on your phone would break Home
   Assistant.
 
-## Entities
+## 🔌 Entities
 
 | Entity | Type |
 | --- | --- |
@@ -106,7 +115,13 @@ attributes (`wifi_ssid`, `privacy_mode`), these are the authoritative ones —
 they come from the v2 shadow with a device timestamp, while the camera
 attributes come from the older v1 shadow that carries no timestamp.
 
-## Known limitations
+## 📚 Docs
+
+- [Local video](docs/go2rtc.md): stream the doorbell straight to your LAN over
+  Qubo's peer-to-peer protocol, so video never touches the cloud and two viewers
+  can watch at once.
+
+## ⚠️ Known limitations
 
 - **The cloud relays video.** Stream URLs are minted per viewer from the Qubo
   cloud and are single-consumer, so two viewers cannot watch at once and video
@@ -125,29 +140,28 @@ attributes come from the older v1 shadow that carries no timestamp.
   integration polls for up to three minutes waiting for the lock to actually
   report, rather than assuming the bolt moved.
 
-## Implementation notes
+## 💡 Implementation notes
 
-The integration is pinned to `qubopy==0.2.0`, which handles authentication,
-token refresh, device discovery, typed device objects and shadow parsing, and
-covers the response shape of every request this integration sends.
+This integration would not exist without
+**[qubopy](https://github.com/selvakk2k/qubopy) by
+[@selvakk2k](https://github.com/selvakk2k)**. That library reverse-engineers the
+Qubo REST API and is what makes an integration like this possible at all:
+authentication and token refresh, device discovery, typed device objects, the
+shadow model and the command envelopes. Every request this integration sends is
+built from its routes and models, and it is pinned to `qubopy==0.2.0`.
 
-Earlier versions had five defects that made them unusable here, all reported
-upstream and fixed in 0.1.4:
+Several fixes here came out of reporting real problems against the live API, and
+the maintainer took them back the same day — writers using `POST` where the
+cloud only accepts `PUT`, every 2xx body being parsed as JSON although writes
+answer with the literal text `SUCCESS`, a bulk shadow endpoint answering 405, a
+doorbell events endpoint that never resolved, and no way to override the P2P
+identifiers a session actually needs. If you maintain a library and someone
+shows up with packet captures and a reproducible test, this is what good
+open-source maintenance looks like.
 
-- The cloud answers attribute writes and commands with HTTP 200 and the plain text
-  `SUCCESS`. Older `qubopy` parsed every 2xx body as JSON, so a write that fully
-  succeeded raised `Failed to parse server response as JSON`.
-- `send_command()` and `update_shadow_attribute()` built the correct URLs but sent
-  `POST`, where the cloud only accepts `PUT` (`405 Request method 'POST' not
-  supported`).
-- `get_all_shadows()` issued a `GET` the cloud rejects with 405.
-- `get_device_events()` pointed at an endpoint that answers 405 or 404.
-- The v1 shadow `qubopy` parses carries no timestamps, so a stale reading is
-  indistinguishable from a fresh one. 0.1.4 adds `get_device_shadow_v2()`,
-  which returns the value together with the moment the device last reported it.
-
-`api.py` is the only module that still reaches past the library, and it now does
-so for two narrow reasons:
+The integration is pinned to `qubopy==0.2.0`, which covers the response shape
+of every request it sends. `api.py` is the only module that still reaches past
+the library, and it does so for two narrow reasons:
 
 - Reads go through `get_device_shadow_v2()` rather than the default v1 shadow,
   because a switch write cannot be confirmed without a device-side timestamp.
@@ -182,11 +196,13 @@ setup. An **existing** install does not reinstall dependencies when files are
 copied over `custom_components/` — install it manually before restarting Home
 Assistant:
 
+```sh
+docker exec homeassistant pip install qubopy==0.2.0
 ```
 docker exec homeassistant pip install qubopy==0.2.0
 ```
 
-## Tests
+## 🧪 Tests
 
 The tests stub `qubopy`, so they run without it installed and without network
 access:
@@ -210,3 +226,7 @@ body has it at the top level — mixing them up earns a rejected write. It also
 stubs `request()` the way 0.2.0 behaves, because the integration relies on the
 library to accept the plain-text `SUCCESS` reply and to map 401/403 onto an auth
 error.
+
+## ⭐ Show Your Support
+
+Give a ⭐ if this project helped you!
