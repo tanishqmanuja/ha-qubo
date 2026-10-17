@@ -199,8 +199,6 @@ Assistant:
 ```sh
 docker exec homeassistant pip install qubopy==0.2.0
 ```
-docker exec homeassistant pip install qubopy==0.2.0
-```
 
 ## 🧪 Tests
 
