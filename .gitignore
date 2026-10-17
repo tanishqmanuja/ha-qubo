@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Reverse-engineering artefacts. reverse/ holds the decompiled APK and
+# downloaded tools; REVERSE.md is the findings write-up. Both are development
+# notes, not part of the integration.
+reverse/
+REVERSE.md
+
+# Personal tooling config, not part of the integration.
+opencode.json
+
+# Python packages the documented go2rtc client installs for itself on first run.
+docs/_libs/

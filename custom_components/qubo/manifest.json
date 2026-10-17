@@ -1,0 +1,13 @@
+{
+  "domain": "qubo",
+  "name": "Qubo",
+"codeowners": ["@tanishqmanuja"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/tanishqmanuja/ha-qubo",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/tanishqmanuja/ha-qubo/issues",
+  "requirements": ["qubopy==0.1.3"],
+  "version": "1.0.0"
+}

@@ -1,0 +1,58 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Qubo",
+        "description": "Sign in with the Qubo cloud account that owns your doorbell and locks.",
+        "data": {
+          "email": "Email",
+          "password": "Password",
+          "device_name": "Name shown in the Qubo app"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid email or password.",
+      "cannot_connect": "Could not reach the Qubo cloud.",
+      "no_devices": "This Qubo account has no hardware paired yet."
+    },
+    "abort": {
+      "already_configured": "This Qubo account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Qubo login name",
+        "description": "The name shown for this integration under Account -> Logged In Devices in the Qubo app. Changing it signs in again under the new name.",
+        "data": {
+          "device_name": "Name shown in the Qubo app"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "battery": { "name": "Battery" },
+      "last_doorbell_event": { "name": "Last doorbell event" },
+      "wifi_ssid": { "name": "Wi-Fi network" },
+      "time_zone": { "name": "Reported time zone" }
+    },
+    "switch": {
+      "dnd": { "name": "Do not disturb" },
+      "chime_bell": { "name": "Chime bell" },
+      "privacy_mode": { "name": "Privacy mode" },
+      "tamper_alerts": { "name": "Tamper alerts" },
+      "timelapse_generator": { "name": "Timelapse generator" },
+      "silent_mode": { "name": "Silent mode" }
+    },
+    "button": {
+      "restart": { "name": "Restart" }
+    }
+  },
+  "exceptions": {
+    "lock_not_supported": {
+      "message": "Qubo smart locks can only be unlocked remotely. Locking must be done from the keypad inside, or the app will lock it automatically."
+    }
+  }
+}
