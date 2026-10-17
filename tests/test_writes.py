@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 COMPONENT_DIR = Path(__file__).resolve().parents[1] / "custom_components" / "qubo"
 
-# Verbatim from qubopy 0.1.2 qubopy/const.py.
+# Verbatim from qubopy 0.1.4 qubopy/const.py.
 PATH_SEND_COMMAND = (
     "/unit-entity-management/api/v1/sp/{sp}/units/{unit_uuid}"
     "/entities/{entity_uuid}/devices/{device_uuid}/command"
@@ -73,6 +73,8 @@ def _install_qubopy_stub() -> None:
 
 
 _install_qubopy_stub()
+
+from qubopy.exceptions import QuboAuthError  # noqa: E402  (stub installed above)
 
 # api.py uses a relative import for .shadow, so load it as part of a package
 # rather than putting the component directory itself on sys.path.
@@ -123,13 +125,20 @@ class FakeAuth:
 
 
 class RecordingClient:
-    """Stand-in for QuboClient that keeps every call it is handed."""
+    """Stand-in for QuboClient that keeps every call it is handed.
+
+    ``request`` mirrors qubopy 0.1.4: a plain-text ``SUCCESS`` body is accepted,
+    401/403 raise ``QuboAuthError``, and anything else raises
+    ``QuboCommandError`` carrying the reply.
+    """
 
     sp_id = "d10e4bfb0153496e8e8bb955f7ebe413"
     base_url = "https://srvcapp.platform.quboworld.com:443"
 
     def __init__(self, status: int = 200, text: str = "SUCCESS") -> None:
         self.auth = FakeAuth()
+        self.status = status
+        self.text = text
         self.session = FakeSession(status, text)
         self.reads: list[tuple[str, str, object]] = []
 
@@ -138,8 +147,17 @@ class RecordingClient:
         return self.session
 
     async def request(self, method, path, json_data=None, params=None, retry=False):
-        """Record a read and behave like a successful GET."""
+        """Record the call and answer with the status the fake was built with."""
         self.reads.append((method, path, json_data))
+        self.session.calls.append(
+            (method, f"{self.base_url}{path}", json_data)
+        )
+        if self.status in (401, 403):
+            raise QuboAuthError(f"rejected (HTTP {self.status})")
+        if self.status not in (200, 201, 204):
+            raise api.QuboCommandError(
+                f"Qubo API error (HTTP {self.status}): {self.text}"
+            )
         return {"attributeValue": "false", "timestamp": 0}
 
 
@@ -245,7 +263,7 @@ def test_a_rejected_session_is_reported_as_an_auth_error() -> None:
     client = RecordingClient(status=401, text="")
     try:
         asyncio.run(api.QuboApi(client).send_command(FakeDevice(), "deviceReboot", "reboot"))
-    except api.QuboAuthError:
+    except QuboAuthError:
         return
     raise AssertionError("a 401 write must raise QuboAuthError")
 

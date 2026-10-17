@@ -1,20 +1,19 @@
-"""Endpoints that qubopy gets wrong, kept here until the library is fixed.
+"""Shadow reads that carry the device's own timestamp, and write paths we still
+format ourselves.
 
-qubopy 0.1.2 has no reader for the v2 per-attribute shadow
-(``/api/v2/.../devices/{id}/deviceshadow?serviceName=&attributeName=``), which is
-the only way to read a live attribute together with the moment the device last
-reported it. The v1 shadow that qubopy parses carries no timestamps, so stale
-readings are indistinguishable from fresh ones.
+The cloud's v1 shadow that qubopy parses by default carries no timestamps, so a
+stale reading is indistinguishable from a fresh one - which matters when deciding
+whether a switch write actually reached the device. The only way to see both the
+value and the moment the device last reported it is the v2 per-attribute shadow
+(``/api/v2/.../devices/{id}/deviceshadow?serviceName=&attributeName=``), so reads
+go through :meth:`QuboClient.get_device_shadow_v2`.
 
-Its writers are also wrong in two ways. ``send_command`` and
-    ``update_shadow_attribute`` use POST, but the cloud only accepts PUT on those
-    paths and answers POST with ``405 Request method 'POST' not supported``. The
-    path constants qubopy defines are correct, so :meth:`QuboApi.write_attribute`
-    and :meth:`QuboApi.send_command` reuse them and issue the PUT. And
-    ``client.request`` insists every 2xx body is JSON, while both write endpoints
-    answer with the literal text ``SUCCESS`` - so a write that worked raises
-    "Failed to parse server response as JSON". Writes therefore go out through
-    :meth:`QuboApi._write`, which judges the reply by status code.
+The write paths stay here for one reason only. qubopy 0.1.3 issued them with POST,
+which the cloud rejects, and parsed every 2xx body as JSON although both endpoints
+answer with the literal text ``SUCCESS``; 0.1.4 fixed both. What it does not do is
+validate a device's binding before addressing it, so :meth:`QuboApi._device_path`
+still formats the template here where a missing unit or entity uuid fails loudly
+with a :class:`QuboCommandError` instead of guessing a scope.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from typing import Any, NamedTuple
 from qubopy import QuboClient
 from qubopy.const import PATH_SEND_COMMAND, PATH_UPDATE_SHADOW_ATTRIBUTE
 from qubopy.devices import QuboDevice
-from qubopy.exceptions import QuboAuthError, QuboCommandError
+from qubopy.exceptions import QuboCommandError
 
 from .shadow import DoorbellEvent, parse_vms_events
 
@@ -72,13 +71,9 @@ class QuboApi:
         Returns ``None`` when the device or attribute does not exist, which is
         how the integration detects that this hardware cannot report it.
         """
-        path = (
-            f"/unit-entity-management/api/v2/sp/{self.sp_id}"
-            f"/devices/{device_uuid}/deviceshadow"
-        )
         try:
-            resp = await self._client.request(
-                "GET", path, params={"serviceName": service, "attributeName": attribute}
+            resp = await self._client.get_device_shadow_v2(
+                device_uuid, service_name=service, attribute_name=attribute
             )
         except QuboCommandError as err:
             _LOGGER.debug("Qubo %s.%s unavailable: %s", service, attribute, err)
@@ -124,23 +119,14 @@ class QuboApi:
         )
 
     async def _write(self, path: str, body: dict[str, Any]) -> None:
-        """PUT a write request and accept the cloud's plain-text success reply.
+        """PUT one write and let qubopy judge the reply.
 
-        qubopy's ``request`` would parse every 2xx body as JSON and raise on the
-        literal ``SUCCESS`` these endpoints return, so the request is issued
-        against the session directly and judged by status code.
+        Since 0.1.4 ``client.request`` accepts the plain-text ``SUCCESS`` these
+        endpoints answer with, raises :class:`QuboAuthError` on 401/403, retries
+        once through a token refresh on 401, and raises
+        :class:`QuboCommandError` with the body on anything else.
         """
-        session = await self._client._get_session()
-        headers = await self._client.auth.get_headers()
-        async with session.request(
-            "PUT", f"{self._client.base_url}{path}", json=body, headers=headers
-        ) as response:
-            status = response.status
-            text = (await response.text()).strip()
-        if status in (401, 403):
-            raise QuboAuthError(f"Qubo rejected a write (HTTP {status})")
-        if status not in (200, 201, 204):
-            raise QuboCommandError(f"Qubo write failed (HTTP {status}): {text[:200]}")
+        await self._client.request("PUT", path, json_data=body)
 
     async def write_attribute(
         self, device: QuboDevice, service: str, attribute: str, value: str
