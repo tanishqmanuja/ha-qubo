@@ -50,6 +50,11 @@ Environment:
                the longest expected viewing session: go2rtc does not restart a
                finished exec source, so exiting under a viewer kills their stream
                with nothing to replace it.
+    QMEDIATIMEOUT  seconds to wait for the first media packet before giving up
+               (default: 30). A session the doorbell never joins must not
+               outlive the process that started it.
+    QSTALLTIMEOUT  seconds a working session may go silent before giving up
+               (default: 120).
     QSTORE     path to Home Assistant's core.config_entries
     QACCESS / QREFRESH / QUUID / QDEVICEID
                explicit credentials, used instead of reading QSTORE
@@ -88,6 +93,12 @@ BIND_REQUEST = 0x0001
 BIND_SUCCESS = 0x0101
 CHECK_INTERVAL = 2.0
 STALL_DROP_SECONDS = 0.5
+
+# How long to wait for the first media packet, and how long a session may go
+# silent once it was working. Both exist so a session the doorbell never
+# joins cannot outlive the process that started it.
+MEDIA_TIMEOUT = float(os.environ.get("QMEDIATIMEOUT", "30"))
+STALL_TIMEOUT = float(os.environ.get("QSTALLTIMEOUT", "120"))
 
 # A fresh key and IV per process, which is also a fresh session: the doorbell
 # uses exactly the values we hand it in the p2pCall request.
@@ -317,12 +328,31 @@ def main() -> None:
     last_flush = time.time()
     packets = 0
     started = time.time()
+    last_media = started
+    parent_pid = os.getppid()
 
     sys.stderr.write(f"qubo: advertising {advert}:{port} -> {out_path}\n")
     sys.stderr.flush()
 
     while time.time() - started < duration:
         now = time.time()
+        if os.getppid() != parent_pid:
+            # The process that started us is gone, so nobody is reading our
+            # output any more. Leaving would hold the UDP port and answer
+            # the doorbell's checks for the rest of QDUR.
+            sys.stderr.write("qubo: parent gone, exiting\n")
+            break
+        # A session that never delivers media is dead, not slow. Without
+        # this the client would sit in recvfrom for the whole of QDUR,
+        # holding the UDP port and answering the doorbell's checks long
+        # after go2rtc gave up on it -- which makes the next session fail
+        # too.
+        if packets == 0 and now - started > MEDIA_TIMEOUT:
+            sys.stderr.write(f"qubo: no media within {MEDIA_TIMEOUT:.0f}s, giving up\n")
+            break
+        if packets and now - last_media > STALL_TIMEOUT:
+            sys.stderr.write(f"qubo: media stopped for {STALL_TIMEOUT:.0f}s, giving up\n")
+            break
         if doorbell:
             if now - last_a > CHECK_INTERVAL:
                 last_a = now
@@ -359,6 +389,7 @@ def main() -> None:
         except Exception:  # noqa: BLE001 - a corrupt packet is not fatal
             continue
         packets += 1
+        last_media = time.time()
         if payload_type != PT_VIDEO:
             continue
 

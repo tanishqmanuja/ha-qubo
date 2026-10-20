@@ -121,6 +121,20 @@ Notes on that line:
 - `preload` keeps one session open so the first viewer does not wait for a
   handshake. Without it the stream still works, it just connects on demand.
 
+The client also takes two timeouts of its own, both defaulted and rarely
+needing a change:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `QMEDIATIMEOUT` | 30 | Give up if no media arrives within this many seconds |
+| `QSTALLTIMEOUT` | 120 | Give up if a working session goes this many seconds without media |
+
+Both exist so a session the doorbell never joins cannot outlive the process
+that started it. Without them the client waits out the whole of `QDUR` — 24
+hours with the setting above — holding the UDP port and answering the
+doorbell's checks long after go2rtc abandoned it, which makes the next session
+fail as well.
+
 ## Why the obvious fixes backfire
 
 The failure looks like "go2rtc does not reconnect", and the two natural repairs
@@ -176,6 +190,24 @@ that is what keeps it occupied.
 
 **Bind failure on restart.** The client sets `SO_REUSEADDR` and retries once
 after 3 seconds, so a lingering previous process is normally not a problem.
+
+**The client runs but nothing arrives, and it never exits.** Older versions
+waited the full `QDUR` for media that was never coming, holding the UDP port
+and still answering the doorbell's checks — which made the *next* session fail
+too. The client now gives up after `QMEDIATIMEOUT` seconds without a single
+media packet, and after `QSTALLTIMEOUT` seconds of silence once it was working.
+
+**Orphaned clients, several `qubo_client.py` processes at once.** go2rtc runs
+the source through `sh -c` and kills that shell when it stops a producer, but
+the shell's children are not killed with it. The client now watches its parent
+and exits when it is reparented, so a session can never outlive the process
+that started it. If you ever see more than one, something is running a copy
+outside go2rtc.
+
+**A session that goes quiet while you are watching.** The client treats
+`QSTALLTIMEOUT` seconds of silence as dead and exits, which drops the stream.
+Raise it if your doorbell pauses for long stretches, but understand that a
+higher value also means a broken session lingers that much longer.
 
 **Two `qubo_p2p_client.py` processes on the same port.** Expected: `preload`
 holds a standby session while a viewer's session runs. The doorbell serves one
