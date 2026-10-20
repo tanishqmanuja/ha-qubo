@@ -98,7 +98,7 @@ preload:
 
 streams:
   qubo_doorbell:
-    - exec:sh -c "QDEVICE=<doorbell-uuid> QUNIT=<unit-uuid> QMOB=<phone-uuid> QADVERT=<host-lan-ip> QPORT=49700 QQUALITY=high QDUR=86400 QSTORE=/ha-storage/core.config_entries python3 /config/qubo_p2p_client.py - 49700 2>>/config/qubo_err.log | ffmpeg -hide_banner -loglevel error -f h264 -i pipe:0 -c copy -f rtsp {output}"
+    - exec:sh -c "QDEVICE=<doorbell-uuid> QUNIT=<unit-uuid> QMOB=<phone-uuid> QADVERT=<host-lan-ip> QPORT=49700 QQUALITY=high QDUR=86400 QSTORE=/ha-storage/core.config_entries python3 /config/qubo_p2p_client.py - 49700 2>>/config/qubo_err.log | ffmpeg -hide_banner -loglevel error -f h264 -i pipe:0 -c copy -f rtsp {output}"#starttimeout=45
 
 webrtc:
   candidates:
@@ -118,6 +118,10 @@ Notes on that line:
   client exits when `QDUR` expires, and go2rtc does *not* restart a finished
   exec source — a viewer watching at that moment gets a stream that dies with
   nothing to replace it. See [why the obvious fixes backfire](#why-the-obvious-fixes-backfire).
+- `#starttimeout=45` tells go2rtc how long to wait for ffmpeg to publish before
+  it gives up on the source. It has to be comfortably longer than the client's
+  `QMEDIATIMEOUT`, so the client gives up first and says why, instead of the
+  two racing and the reason being lost. go2rtc's default is 30 seconds.
 - `preload` keeps one session open so the first viewer does not wait for a
   handshake. Without it the stream still works, it just connects on demand.
 
@@ -134,6 +138,34 @@ that started it. Without them the client waits out the whole of `QDUR` — 24
 hours with the setting above — holding the UDP port and answering the
 doorbell's checks long after go2rtc abandoned it, which makes the next session
 fail as well.
+
+## Driving it from Home Assistant
+
+`/api/preload` **blocks** until go2rtc has a producer publishing, and that can
+take 15 seconds or more: the client has to get a session, complete the UDP
+handshake and wait for the doorbell's first frame. Home Assistant's
+`rest_command` gives up after 10 seconds by default, so a slow preload comes
+back as `Timeout when calling resource` even though the session starts fine a
+moment later.
+
+Raise the timeout on the `rest_command`:
+
+```yaml
+url: "http://localhost:1984/api/preload?src=qubo_doorbell&video=h264"
+method: put
+timeout: 45
+```
+
+Two more things worth knowing when wiring this up:
+
+- The doorbell stops sending video when it has nothing to show, and go2rtc
+  drops the producer when the feed goes quiet. A warm session is therefore not
+  a session that stays up for hours — it is one that starts quickly when
+  somebody is at the door. The client notices it was abandoned and exits, so
+  nothing is left behind.
+- `DELETE /api/preload` returns **500** when there is no preload to release,
+  which is what happens when Home Assistant restarts while nothing is warm.
+  Harmless, but it shows up as a warning in the log.
 
 ## Why the obvious fixes backfire
 
